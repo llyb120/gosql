@@ -20,7 +20,7 @@ type Engine struct {
 	store       *TemplateStore
 	compiledAST map[string]*TemplateAST // 缓存编译后的 AST
 	interp      *interpreter.Interpreter
-	funcs       map[string]interface{}  // 注册的自定义函数
+	funcs       map[string]interface{} // 注册的自定义函数
 }
 
 // New 创建新的 SQL 模板引擎
@@ -61,11 +61,11 @@ func (e *Engine) LoadMarkdown(content string) error {
 // GetSql 获取渲染后的 SQL 和参数
 // path: 模板路径，格式为 "namespace.name" 或 "namespace.name.define"
 // args: 模板渲染的 scope（任意类型，会被展开为变量）
-func (e *Engine) GetSql(path string, args interface{}) (*Query, error) {
+func (e *Engine) GetSql(path string, args interface{}) (Query, error) {
 	// 解析路径
 	parts := strings.Split(path, ".")
 	if len(parts) < 2 {
-		return nil, fmt.Errorf("invalid path: %s, expected format: namespace.name", path)
+		return Query{}, fmt.Errorf("invalid path: %s, expected format: namespace.name", path)
 	}
 
 	namespace := parts[0]
@@ -80,7 +80,7 @@ func (e *Engine) GetSql(path string, args interface{}) (*Query, error) {
 	// 获取 AST
 	ast, ok := e.compiledAST[key]
 	if !ok {
-		return nil, fmt.Errorf("template not found: %s", key)
+		return Query{}, fmt.Errorf("template not found: %s", key)
 	}
 
 	// 创建执行上下文
@@ -90,19 +90,19 @@ func (e *Engine) GetSql(path string, args interface{}) (*Query, error) {
 	if defineName != "" {
 		defineNode := findDefine(ast.Nodes, defineName)
 		if defineNode == nil {
-			return nil, fmt.Errorf("define not found: %s in template %s", defineName, key)
+			return Query{}, fmt.Errorf("define not found: %s in template %s", defineName, key)
 		}
 		if err := ctx.executeNodes(defineNode.Body); err != nil {
-			return nil, err
+			return Query{}, err
 		}
 	} else {
 		// 执行整个模板
 		if err := ctx.executeNodes(ast.Nodes); err != nil {
-			return nil, err
+			return Query{}, err
 		}
 	}
 
-	return &Query{
+	return Query{
 		SQL:    ctx.sql.String(),
 		Params: ctx.args,
 	}, nil
@@ -535,7 +535,7 @@ func (ctx *executionContext) executeFuncBlock(n *FuncBlockNode) error {
 		return err
 	}
 
-	// 创建 Query 对象
+	// 创建 Query 对象（优先以指针形式传递，便于函数块直接修改 SQL/Params）
 	query := &Query{
 		SQL:    subCtx.sql.String(),
 		Params: subCtx.args,
@@ -550,15 +550,36 @@ func (ctx *executionContext) executeFuncBlock(n *FuncBlockNode) error {
 		// 直接调用无参函数
 		if fnVal := reflect.ValueOf(fn); fnVal.Kind() == reflect.Func {
 			fnType := fnVal.Type()
-			// 检查函数是否接受 Query 参数
-			if fnType.NumIn() == 1 && fnType.In(0) == reflect.TypeOf((*Query)(nil)) {
+			// 优先支持 func(*Query)
+			if fnType.NumIn() == 1 && fnType.In(0) == reflect.TypeOf(&Query{}) {
 				results := fnVal.Call([]reflect.Value{reflect.ValueOf(query)})
 				if len(results) > 0 {
 					result := results[0].Interface()
 					if s, ok := result.(string); ok {
-						ctx.sql.WriteString(s)
+						query.SQL = s
+					} else if q, ok := result.(Query); ok {
+						*query = q
+					} else if qp, ok := result.(*Query); ok && qp != nil {
+						query = qp
 					}
 				}
+				ctx.sql.WriteString(query.SQL)
+				ctx.args = append(ctx.args, query.Params...)
+				return nil
+			}
+			// 兼容旧：func(Query)
+			if fnType.NumIn() == 1 && fnType.In(0) == reflect.TypeOf(Query{}) {
+				results := fnVal.Call([]reflect.Value{reflect.ValueOf(*query)})
+				if len(results) > 0 {
+					result := results[0].Interface()
+					if s, ok := result.(string); ok {
+						query.SQL = s
+					} else if q, ok := result.(Query); ok {
+						*query = q
+					}
+				}
+				ctx.sql.WriteString(query.SQL)
+				ctx.args = append(ctx.args, query.Params...)
 				return nil
 			}
 		}
@@ -588,7 +609,7 @@ func (ctx *executionContext) executeFuncBlock(n *FuncBlockNode) error {
 		funcExpr = funcExpr + "(__query__)"
 	}
 
-	// 绑定 query 到作用域
+	// 绑定 query 到作用域（指针），便于函数直接修改
 	ctx.scope["__query__"] = query
 	ctx.interp.BindValue("__query__", query)
 
@@ -601,15 +622,19 @@ func (ctx *executionContext) executeFuncBlock(n *FuncBlockNode) error {
 		return nil
 	}
 
-	// 处理返回值
+	// 如果函数返回值存在，则作为兼容逻辑；推荐直接修改 *Query
 	if result != nil {
 		if s, ok := result.(string); ok {
-			ctx.sql.WriteString(s)
-		} else if q, ok := result.(*Query); ok {
-			ctx.sql.WriteString(q.SQL)
-			ctx.args = append(ctx.args, q.Params...)
+			query.SQL = s
+		} else if q, ok := result.(Query); ok {
+			*query = q
+		} else if qp, ok := result.(*Query); ok && qp != nil {
+			query = qp
 		}
 	}
+
+	ctx.sql.WriteString(query.SQL)
+	ctx.args = append(ctx.args, query.Params...)
 
 	return nil
 }
@@ -974,9 +999,9 @@ func Load(content string) error {
 }
 
 // GetSqlFromDefault 从默认引擎获取 SQL
-func GetSqlFromDefault(path string, args interface{}) (*Query, error) {
+func GetSqlFromDefault(path string, args interface{}) (Query, error) {
 	if defaultEngine == nil {
-		return nil, fmt.Errorf("engine not initialized, call Init() first")
+		return Query{}, fmt.Errorf("engine not initialized, call Init() first")
 	}
 	return defaultEngine.GetSql(path, args)
 }

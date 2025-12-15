@@ -514,7 +514,13 @@ func TestGetSql(t *testing.T) {
 		t.Fatalf("LoadMarkdown error: %v", err)
 	}
 
-	query, err := engine.GetSql("test.sql1", map[string]interface{}{"id": 1, "ids": []int{1, 2, 3}})
+	query, err := engine.GetSql("test.sql1", map[string]interface{}{"id": 1, "ids": []int{1, 2, 3}, "trim": func(operator string, query Query) string {
+		query.SQL = strings.TrimSpace(query.SQL)
+		// trim operator
+		query.SQL = strings.TrimPrefix(query.SQL, operator)
+		query.SQL = strings.TrimSuffix(query.SQL, operator)
+		return " " + query.SQL + " "
+	}})
 	if err != nil {
 		t.Fatalf("GetSql error: %v", err)
 	}
@@ -537,6 +543,43 @@ func TestGetSql(t *testing.T) {
 	t.Log("==================")
 	t.Log("TestGetSql with condition")
 	query, err = engine.GetSql("test.sql2", map[string]interface{}{"a": 1, "name": "test", "age": 20, "id": 1, "ids": []int{1, 2, 3}})
+	if err != nil {
+		t.Fatalf("GetSql error: %v", err)
+	}
+	t.Logf("SQL: %s", query.SQL)
+	t.Logf("Params: %v", query.Params)
+
+	t.Log("==================")
+	t.Log("TestGetSql with custom function: sql6")
+	query, err = engine.GetSql("test.sql6", map[string]interface{}{"ids": []int{1, 2, 3}, "trim": func(operator string, query *Query) {
+		query.SQL = strings.TrimSpace(query.SQL)
+		// trim operator
+		query.SQL = strings.TrimPrefix(query.SQL, operator)
+		query.SQL = strings.TrimSuffix(query.SQL, operator)
+		query.Params = append(query.Params, "444")
+	}})
+	if err != nil {
+		t.Fatalf("GetSql error: %v", err)
+	}
+	t.Logf("SQL: %s", query.SQL)
+	t.Logf("Params: %v", query.Params)
+}
+
+func TestGetSql2(t *testing.T) {
+	engine := New()
+	bs, _ := os.ReadFile("example.md")
+	err := engine.LoadMarkdown(string(bs))
+	if err != nil {
+		t.Fatalf("LoadMarkdown error: %v", err)
+	}
+
+	var p = Person{
+		Id:   1,
+		Name: "test",
+		Ids:  []string{"1", "2", "3"},
+	}
+
+	query, err := engine.GetSql("test.sql8", p)
 	if err != nil {
 		t.Fatalf("GetSql error: %v", err)
 	}
@@ -665,6 +708,8 @@ func (b Base) GetBaseValue() string {
 type Person struct {
 	Id   int
 	Name string
+
+	Ids []string
 }
 
 func (p Person) GetName() string {
@@ -673,6 +718,16 @@ func (p Person) GetName() string {
 
 func (p *Person) GetId() int {
 	return p.Id
+}
+
+func (p Person) Trim(operator string, query *Query) {
+	query.SQL = strings.TrimSpace(query.SQL)
+	query.SQL = strings.TrimPrefix(query.SQL, operator)
+	query.SQL = strings.TrimSuffix(query.SQL, operator)
+	for i, v := range query.Params {
+		query.Params[i] = v.(string) + " ok "
+	}
+	query.SQL = " " + query.SQL + " "
 }
 
 type EmbeddedPerson struct {

@@ -61,6 +61,13 @@ define
 ```sql
 select * from table
 where 1 = 1
+
+@trim("and") {
+    @for _,v := range ids {
+        and id = @v
+    }
+}
+
 @define a {
     this is block a
     and id = @id
@@ -76,7 +83,80 @@ where 1 = 1
 name is @= GetName() @
 id is @= GetId() @
 
+and a = @ Test() {
+    select ok
+}
+
 @use test.sql4.a {
+
+}
+```
+
+## sql6
+测试自定义函数块
+```sql
+select * from table
+where 1 = 1
+
+@trim("and") {
+    @for _,v := range ids {
+        and id = @v
+    }
+}
+```
+
+
+## sql7
+12312321
+```sql
+select * from @GetTable()
+where 
+    1 = 1
+    and id = @id
+    and name = @GetName()
+    and name = @=GetName()
+
+@if id > 0 {
+    and a = 1
+} else if {
+    and b = 2
+} else {
+    and c = 3
+}
+
+--# slot abc 
+--# end
+
+@define abc {
+    and id = @id
+    and id2 = @=Id
+}
+
+--# trim ,
+--# end
+
+```
+
+
+## sql8
+```sql
+@use test.sql7.abc {
+}
+;
+
+select * from table 
+where
+@Trim("and") {
+    @for _,v := range ids {
+        and id = @v
+    }
+}
+
+@UseV2("") {
+
+}
+
+@UseV3("") {
 
 }
 ```

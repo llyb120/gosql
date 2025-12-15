@@ -225,6 +225,11 @@ func (l *Lexer) scanAtToken() error {
 	case "cover":
 		return l.scanCoverToken(startLine, startColumn)
 	default:
+		// 检查是否是函数块 @funcName(...) {} 形式
+		if l.peek() == '(' {
+			return l.scanFuncBlockToken(word, startLine, startColumn)
+		}
+
 		// 检查是否以 ? 结尾（条件控制）
 		tokenType := TOKEN_VAR
 		if l.peek() == '?' {
@@ -254,6 +259,71 @@ func (l *Lexer) readWord() string {
 		}
 	}
 	return sb.String()
+}
+
+// scanFuncBlockToken 扫描 @funcName(...) {} 形式的函数块
+func (l *Lexer) scanFuncBlockToken(funcName string, startLine, startColumn int) error {
+	// 读取函数调用部分 (...)
+	var sb strings.Builder
+	sb.WriteString(funcName)
+
+	parenDepth := 0
+	for l.pos < len(l.input) {
+		ch := l.peek()
+
+		if ch == '(' {
+			parenDepth++
+			sb.WriteByte(l.advance())
+		} else if ch == ')' {
+			parenDepth--
+			sb.WriteByte(l.advance())
+			if parenDepth == 0 {
+				break
+			}
+		} else {
+			sb.WriteByte(l.advance())
+		}
+	}
+
+	// 跳过空白
+	l.skipWhitespace()
+
+	// 检查是否有 { 开始块
+	if l.peek() == '{' {
+		l.advance() // 跳过 {
+
+		// 读取块内容
+		blockContent, err := l.readUntilMatchingBrace()
+		if err != nil {
+			return err
+		}
+
+		l.tokens = append(l.tokens, Token{
+			Type:    TOKEN_FUNC_BLOCK,
+			Value:   strings.TrimSpace(sb.String()) + "|" + strings.TrimSpace(blockContent),
+			Line:    startLine,
+			Column:  startColumn,
+			Context: l.getContext(startLine),
+		})
+		return nil
+	}
+
+	// 没有块，当作普通变量处理（虽然这种情况不太常见）
+	// 这里需要回退，但由于已经消费了括号内容，我们只能当作表达式处理
+	tokenType := TOKEN_VAR_EXPR
+	if l.peek() == '?' {
+		l.advance()
+		tokenType = TOKEN_VAR_EXPR_COND
+	}
+
+	l.tokens = append(l.tokens, Token{
+		Type:    tokenType,
+		Value:   strings.TrimSpace(sb.String()),
+		Line:    startLine,
+		Column:  startColumn,
+		Context: l.getContext(startLine),
+	})
+	return nil
 }
 
 // scanVarExpr 扫描 @ expr @ 表达式或 @ func() {} 函数块
