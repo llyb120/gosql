@@ -157,6 +157,7 @@ type executionContext struct {
 	lineArgs   []interface{}   // 行参数缓冲
 	inCondLine bool            // 是否在条件行中
 	condResult bool            // 条件结果
+	definePath []string        // 当前 define 块的路径栈（用于嵌套覆盖）
 }
 
 // newExecutionContext 创建执行上下文
@@ -921,12 +922,30 @@ func (ctx *executionContext) executeUse(n *UseNode) error {
 
 // executeDefine 执行 define 节点
 func (ctx *executionContext) executeDefine(n *DefineNode) error {
-	// 检查是否有 cover 覆盖
+	// 构建完整路径（用于嵌套 define 块的覆盖）
+	// 例如：如果当前路径栈是 ["abc"]，当前 define 是 "d"，则完整路径是 "abc.d"
+	fullPath := n.Name
+	if len(ctx.definePath) > 0 {
+		fullPath = strings.Join(ctx.definePath, ".") + "." + n.Name
+	}
+
+	// 检查是否有 cover 覆盖（优先检查完整路径，再检查简单名称）
+	if coverBody, ok := ctx.covers[fullPath]; ok {
+		return ctx.executeNodes(coverBody)
+	}
+	// 兼容：也检查简单名称
 	if coverBody, ok := ctx.covers[n.Name]; ok {
 		return ctx.executeNodes(coverBody)
 	}
 
 	// 没有覆盖，执行原始内容
+	// 将当前 define 名称压入路径栈
+	ctx.definePath = append(ctx.definePath, n.Name)
+	defer func() {
+		// 弹出路径栈
+		ctx.definePath = ctx.definePath[:len(ctx.definePath)-1]
+	}()
+
 	return ctx.executeNodes(n.Body)
 }
 

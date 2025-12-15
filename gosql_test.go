@@ -898,3 +898,90 @@ result is @= CustomFunc("hello") @
 		t.Error("SQL should contain custom function result")
 	}
 }
+
+func TestNestedDefineOverride(t *testing.T) {
+	engine := New()
+
+	markdown := `
+# test
+
+## sql7_5
+` + "```sql" + `
+pre
+===
+
+@define abc {
+    and id = @id
+    and id2 = @id2
+
+    @define d {
+        this is d block
+    }
+}
+` + "```" + `
+
+## sql8
+` + "```sql" + `
+@use test.sql7_5 {
+    @cover abc.d {
+        d block changed
+    }
+}
+` + "```" + `
+
+## sql8_2
+` + "```sql" + `
+@use test.sql7_5 {
+    @cover abc {
+        abc block changed
+    }
+}
+` + "```" + `
+`
+
+	err := engine.LoadMarkdown(markdown)
+	if err != nil {
+		t.Fatalf("LoadMarkdown error: %v", err)
+	}
+
+	// 测试覆盖嵌套的 define 块 abc.d
+	query, err := engine.GetSql("test.sql8", map[string]interface{}{
+		"id":  1,
+		"id2": 2,
+	})
+	if err != nil {
+		t.Fatalf("GetSql error: %v", err)
+	}
+
+	t.Logf("SQL8: %s", query.SQL)
+
+	// 应该包含修改后的 d 块内容
+	if !strings.Contains(query.SQL, "d block changed") {
+		t.Error("SQL should contain 'd block changed' from cover")
+	}
+	// 原始 d 块内容应该被替换
+	if strings.Contains(query.SQL, "this is d block") {
+		t.Error("SQL should NOT contain original 'd block' content")
+	}
+	// abc 块的其他部分应该保留
+	if !strings.Contains(query.SQL, "and id =") {
+		t.Error("SQL should contain 'and id =' from abc block")
+	}
+
+	// 测试覆盖外层的 abc 块
+	query2, err := engine.GetSql("test.sql8_2", map[string]interface{}{})
+	if err != nil {
+		t.Fatalf("GetSql error: %v", err)
+	}
+
+	t.Logf("SQL8_2: %s", query2.SQL)
+
+	// 应该包含修改后的 abc 块内容
+	if !strings.Contains(query2.SQL, "abc block changed") {
+		t.Error("SQL should contain 'abc block changed' from cover")
+	}
+	// 原始 abc 块内容应该被完全替换
+	if strings.Contains(query2.SQL, "and id =") {
+		t.Error("SQL should NOT contain original abc block content")
+	}
+}

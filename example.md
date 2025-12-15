@@ -130,6 +130,10 @@ where
 @define abc {
     and id = @id
     and id2 = @=Id
+
+    @define d {
+        this is d block
+    }
 }
 
 --# trim ,
@@ -138,9 +142,31 @@ where
 ```
 
 
+## sql7_5
+```sql
+pre
+===
+
+@define abc {
+    and id = @id
+    and id2 = @=Id
+
+    @define d {
+        this is d block
+    }
+}
+```
+
 ## sql8
 ```sql
-@use test.sql7.abc {
+@use test.sql7_5 {
+    @cover abc {
+        abc changed
+    }
+
+    @cover abc.d {
+        d block changed
+    }
 }
 ;
 
@@ -152,11 +178,5 @@ where
     }
 }
 
-@UseV2("") {
 
-}
-
-@UseV3("") {
-
-}
 ```
