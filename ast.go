@@ -116,6 +116,14 @@ type CoverNode struct {
 
 func (n *CoverNode) nodeType() string { return "cover" }
 
+// FuncBlockNode 自定义函数块节点 @ func() {}
+type FuncBlockNode struct {
+	FuncExpr string // 函数表达式（如 GetName()）
+	Body     []Node // 块内节点
+}
+
+func (n *FuncBlockNode) nodeType() string { return "func_block" }
+
 // TemplateAST 模板 AST
 type TemplateAST struct {
 	Namespace string

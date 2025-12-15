@@ -4,15 +4,23 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"unsafe"
 
 	"github.com/llyb120/goscript2/interpreter"
 )
+
+// Query 表示 SQL 查询结果
+type Query struct {
+	SQL    string        // SQL 语句
+	Params []interface{} // 参数列表
+}
 
 // Engine SQL 模板引擎
 type Engine struct {
 	store       *TemplateStore
 	compiledAST map[string]*TemplateAST // 缓存编译后的 AST
 	interp      *interpreter.Interpreter
+	funcs       map[string]interface{}  // 注册的自定义函数
 }
 
 // New 创建新的 SQL 模板引擎
@@ -21,7 +29,13 @@ func New() *Engine {
 		store:       NewTemplateStore(),
 		compiledAST: make(map[string]*TemplateAST),
 		interp:      interpreter.New(),
+		funcs:       make(map[string]interface{}),
 	}
+}
+
+// RegisterFunc 注册自定义函数
+func (e *Engine) RegisterFunc(name string, fn interface{}) {
+	e.funcs[name] = fn
 }
 
 // LoadMarkdown 加载 markdown 文件内容
@@ -47,11 +61,11 @@ func (e *Engine) LoadMarkdown(content string) error {
 // GetSql 获取渲染后的 SQL 和参数
 // path: 模板路径，格式为 "namespace.name" 或 "namespace.name.define"
 // args: 模板渲染的 scope（任意类型，会被展开为变量）
-func (e *Engine) GetSql(path string, args interface{}) (string, []interface{}, error) {
+func (e *Engine) GetSql(path string, args interface{}) (*Query, error) {
 	// 解析路径
 	parts := strings.Split(path, ".")
 	if len(parts) < 2 {
-		return "", nil, fmt.Errorf("invalid path: %s, expected format: namespace.name", path)
+		return nil, fmt.Errorf("invalid path: %s, expected format: namespace.name", path)
 	}
 
 	namespace := parts[0]
@@ -66,7 +80,7 @@ func (e *Engine) GetSql(path string, args interface{}) (string, []interface{}, e
 	// 获取 AST
 	ast, ok := e.compiledAST[key]
 	if !ok {
-		return "", nil, fmt.Errorf("template not found: %s", key)
+		return nil, fmt.Errorf("template not found: %s", key)
 	}
 
 	// 创建执行上下文
@@ -76,19 +90,22 @@ func (e *Engine) GetSql(path string, args interface{}) (string, []interface{}, e
 	if defineName != "" {
 		defineNode := findDefine(ast.Nodes, defineName)
 		if defineNode == nil {
-			return "", nil, fmt.Errorf("define not found: %s in template %s", defineName, key)
+			return nil, fmt.Errorf("define not found: %s in template %s", defineName, key)
 		}
 		if err := ctx.executeNodes(defineNode.Body); err != nil {
-			return "", nil, err
+			return nil, err
 		}
 	} else {
 		// 执行整个模板
 		if err := ctx.executeNodes(ast.Nodes); err != nil {
-			return "", nil, err
+			return nil, err
 		}
 	}
 
-	return ctx.sql.String(), ctx.args, nil
+	return &Query{
+		SQL:    ctx.sql.String(),
+		Params: ctx.args,
+	}, nil
 }
 
 // findDefine 在节点列表中查找 define 块
@@ -152,6 +169,12 @@ func newExecutionContext(engine *Engine, args interface{}) *executionContext {
 		scopeObj: args,
 	}
 
+	// 绑定引擎注册的函数
+	for name, fn := range engine.funcs {
+		ctx.scope[name] = fn
+		ctx.interp.BindFunc(name, fn)
+	}
+
 	// 将 args 展开到 scope（使用缓存的类型信息）
 	if args != nil {
 		ctx.expandToScopeWithCache(args)
@@ -193,39 +216,84 @@ func (ctx *executionContext) expandToScopeWithCache(args interface{}) {
 	}
 }
 
-// expandStructFields 使用缓存展开结构体字段（包括嵌入字段）
+// expandStructFields 使用缓存展开结构体字段（包括嵌入字段和私有字段）
 func (ctx *executionContext) expandStructFields(rv reflect.Value) {
 	rt := rv.Type()
 
 	for i := 0; i < rv.NumField(); i++ {
 		field := rt.Field(i)
-		if !field.IsExported() {
-			continue
-		}
-
 		fieldValue := rv.Field(i)
+
+		// 对于私有字段，使用 unsafe 获取值
+		if !field.IsExported() {
+			// 使用 unsafe 获取私有字段值
+			fieldValue = getUnexportedField(rv, i)
+		}
 
 		if field.Anonymous {
 			// 嵌入字段，递归展开
 			embeddedValue := fieldValue
 			if embeddedValue.Kind() == reflect.Ptr {
-				if embeddedValue.IsNil() {
+				if !embeddedValue.IsValid() || embeddedValue.IsNil() {
 					continue
 				}
 				embeddedValue = embeddedValue.Elem()
 			}
-			if embeddedValue.Kind() == reflect.Struct {
+			if embeddedValue.IsValid() && embeddedValue.Kind() == reflect.Struct {
 				ctx.expandStructFields(embeddedValue)
 				// 也绑定嵌入结构体的方法
-				ctx.bindMethodsWithCache(fieldValue)
+				if fieldValue.IsValid() {
+					ctx.bindMethodsWithCache(fieldValue)
+				}
 			}
+		}
+
+		if !fieldValue.IsValid() {
+			continue
 		}
 
 		// 添加字段值
 		lowerName := toLowerFirst(field.Name)
-		ctx.scope[lowerName] = fieldValue.Interface()
-		ctx.scope[field.Name] = fieldValue.Interface()
+		if fieldValue.CanInterface() {
+			ctx.scope[lowerName] = fieldValue.Interface()
+			ctx.scope[field.Name] = fieldValue.Interface()
+		} else {
+			// 私有字段，使用 unsafe 获取
+			val := getUnexportedFieldValue(fieldValue)
+			ctx.scope[lowerName] = val
+			ctx.scope[field.Name] = val
+		}
 	}
+}
+
+// getUnexportedField 获取未导出的字段值
+func getUnexportedField(rv reflect.Value, index int) reflect.Value {
+	field := rv.Field(index)
+	if field.CanInterface() {
+		return field
+	}
+	// 使用 unsafe 获取私有字段
+	if field.CanAddr() {
+		return reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem()
+	}
+	// 无法获取地址的情况，返回无效值
+	return reflect.Value{}
+}
+
+// getUnexportedFieldValue 获取未导出字段的值
+func getUnexportedFieldValue(field reflect.Value) interface{} {
+	if !field.IsValid() {
+		return nil
+	}
+	if field.CanInterface() {
+		return field.Interface()
+	}
+	// 使用 unsafe 获取值
+	if field.CanAddr() {
+		return reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Interface()
+	}
+	// 无法获取地址的情况
+	return nil
 }
 
 // bindMethodsWithCache 使用缓存绑定方法
@@ -315,6 +383,9 @@ func (ctx *executionContext) executeNode(node Node) error {
 	case *ConditionalLineNode:
 		return ctx.executeConditionalLine(n)
 
+	case *FuncBlockNode:
+		return ctx.executeFuncBlock(n)
+
 	default:
 		return fmt.Errorf("unknown node type: %T", node)
 	}
@@ -323,17 +394,15 @@ func (ctx *executionContext) executeNode(node Node) error {
 // executeVarNode 执行变量节点
 func (ctx *executionContext) executeVarNode(n *VarNode) error {
 	value, ok := ctx.scope[n.Name]
-	if !ok {
-		return fmt.Errorf("variable not found: %s", n.Name)
-	}
 
 	if n.Conditional {
-		// 条件控制：检查值是否为 "真"
-		if !ctx.isTruthy(value) {
-			// 条件为假，标记需要跳过当前行
+		// 条件控制：如果字段不存在或值为假，跳过当前行
+		if !ok || !ctx.isTruthy(value) {
 			ctx.skipCurrentLine()
 			return nil
 		}
+	} else if !ok {
+		return fmt.Errorf("variable not found: %s", n.Name)
 	}
 
 	ctx.appendArg(value)
@@ -362,15 +431,15 @@ func (ctx *executionContext) executeVarExprNode(n *VarExprNode) error {
 // executeRawNode 执行直接输出变量节点
 func (ctx *executionContext) executeRawNode(n *RawNode) error {
 	value, ok := ctx.scope[n.Name]
-	if !ok {
-		return fmt.Errorf("variable not found: %s", n.Name)
-	}
 
 	if n.Conditional {
-		if !ctx.isTruthy(value) {
+		// 条件控制：如果字段不存在或值为假，跳过当前行
+		if !ok || !ctx.isTruthy(value) {
 			ctx.skipCurrentLine()
 			return nil
 		}
+	} else if !ok {
+		return fmt.Errorf("variable not found: %s", n.Name)
 	}
 
 	ctx.sql.WriteString(fmt.Sprintf("%v", value))
@@ -448,6 +517,101 @@ func (ctx *executionContext) skipCurrentLine() {
 	} else {
 		ctx.sql.Reset()
 	}
+}
+
+// executeFuncBlock 执行函数块节点 @ func() {}
+func (ctx *executionContext) executeFuncBlock(n *FuncBlockNode) error {
+	// 先执行块内节点，生成 Query
+	subCtx := &executionContext{
+		engine:   ctx.engine,
+		scope:    ctx.scope,
+		covers:   ctx.covers,
+		interp:   ctx.interp,
+		scopeObj: ctx.scopeObj,
+		typeInfo: ctx.typeInfo,
+	}
+
+	if err := subCtx.executeNodes(n.Body); err != nil {
+		return err
+	}
+
+	// 创建 Query 对象
+	query := &Query{
+		SQL:    subCtx.sql.String(),
+		Params: subCtx.args,
+	}
+
+	// 调用函数，传入 Query 作为最后一个参数
+	// 构造调用表达式
+	funcExpr := strings.TrimSpace(n.FuncExpr)
+
+	// 检查是否是 scope 中的函数
+	if fn, ok := ctx.scope[funcExpr]; ok {
+		// 直接调用无参函数
+		if fnVal := reflect.ValueOf(fn); fnVal.Kind() == reflect.Func {
+			fnType := fnVal.Type()
+			// 检查函数是否接受 Query 参数
+			if fnType.NumIn() == 1 && fnType.In(0) == reflect.TypeOf((*Query)(nil)) {
+				results := fnVal.Call([]reflect.Value{reflect.ValueOf(query)})
+				if len(results) > 0 {
+					result := results[0].Interface()
+					if s, ok := result.(string); ok {
+						ctx.sql.WriteString(s)
+					}
+				}
+				return nil
+			}
+		}
+	}
+
+	// 尝试解析并调用函数表达式
+	// 如果表达式包含括号，需要注入 Query 参数
+	if strings.Contains(funcExpr, "(") {
+		// 替换最后的 ) 为 , query)
+		lastParen := strings.LastIndex(funcExpr, ")")
+		if lastParen > 0 {
+			// 检查是否是空括号
+			openParen := strings.LastIndex(funcExpr[:lastParen], "(")
+			if openParen >= 0 {
+				between := strings.TrimSpace(funcExpr[openParen+1 : lastParen])
+				if between == "" {
+					// 空括号，直接传 query
+					funcExpr = funcExpr[:openParen+1] + "__query__" + funcExpr[lastParen:]
+				} else {
+					// 有参数，追加 query
+					funcExpr = funcExpr[:lastParen] + ", __query__" + funcExpr[lastParen:]
+				}
+			}
+		}
+	} else {
+		// 没有括号，添加 (query)
+		funcExpr = funcExpr + "(__query__)"
+	}
+
+	// 绑定 query 到作用域
+	ctx.scope["__query__"] = query
+	ctx.interp.BindValue("__query__", query)
+
+	// 调用函数
+	result, err := ctx.evalExpr(funcExpr)
+	if err != nil {
+		// 如果函数调用失败，直接输出块内容
+		ctx.sql.WriteString(subCtx.sql.String())
+		ctx.args = append(ctx.args, subCtx.args...)
+		return nil
+	}
+
+	// 处理返回值
+	if result != nil {
+		if s, ok := result.(string); ok {
+			ctx.sql.WriteString(s)
+		} else if q, ok := result.(*Query); ok {
+			ctx.sql.WriteString(q.SQL)
+			ctx.args = append(ctx.args, q.Params...)
+		}
+	}
+
+	return nil
 }
 
 // executeIf 执行 if 节点
@@ -810,9 +974,9 @@ func Load(content string) error {
 }
 
 // GetSqlFromDefault 从默认引擎获取 SQL
-func GetSqlFromDefault(path string, args interface{}) (string, []interface{}, error) {
+func GetSqlFromDefault(path string, args interface{}) (*Query, error) {
 	if defaultEngine == nil {
-		return "", nil, fmt.Errorf("engine not initialized, call Init() first")
+		return nil, fmt.Errorf("engine not initialized, call Init() first")
 	}
 	return defaultEngine.GetSql(path, args)
 }

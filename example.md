@@ -46,9 +46,13 @@ select * from
 }
 -- usedefine的情况
 @use test.sql4 {
-    @cover("b") {
+    @cover b {
         and id = @id
     }
+}
+
+@ GetName() {
+    select ok
 }
 ```
 
@@ -57,10 +61,10 @@ define
 ```sql
 select * from table
 where 1 = 1
-@define(a) {
+@define a {
     this is block a
     and id = @id
-    @define(b) {
+    @define b {
 
     }
 }
@@ -72,7 +76,7 @@ where 1 = 1
 name is @= GetName() @
 id is @= GetId() @
 
-@use("test.sql4.a") {
+@use test.sql4.a {
 
 }
 ```

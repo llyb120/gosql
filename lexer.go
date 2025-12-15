@@ -27,9 +27,10 @@ const (
 	TOKEN_LBRACE                  // {
 	TOKEN_RBRACE                  // }
 	TOKEN_CODE                    // @{} 直接的 Go 代码
-	TOKEN_USE                     // @use
-	TOKEN_DEFINE                  // @define
-	TOKEN_COVER                   // @cover
+	TOKEN_USE                     // @use 或 @use("path")
+	TOKEN_DEFINE                  // @define 或 @define("name")
+	TOKEN_COVER                   // @cover 或 @cover("name")
+	TOKEN_FUNC_BLOCK              // @ func() {} 自定义函数块
 )
 
 // Token 表示一个词法单元
@@ -83,6 +84,8 @@ func (t TokenType) String() string {
 		return "DEFINE"
 	case TOKEN_COVER:
 		return "COVER"
+	case TOKEN_FUNC_BLOCK:
+		return "FUNC_BLOCK"
 	default:
 		return "UNKNOWN"
 	}
@@ -253,11 +256,30 @@ func (l *Lexer) readWord() string {
 	return sb.String()
 }
 
-// scanVarExpr 扫描 @ expr @ 表达式
+// scanVarExpr 扫描 @ expr @ 表达式或 @ func() {} 函数块
 func (l *Lexer) scanVarExpr(startLine, startColumn int) error {
-	expr, err := l.readUntilAt()
+	// 先尝试读取表达式，检查是否是函数块
+	expr, hasBlock, err := l.readExprOrFuncBlock()
 	if err != nil {
 		return err
+	}
+
+	if hasBlock {
+		// 这是一个函数块 @ func() {}
+		// 读取块内容
+		blockContent, err := l.readUntilMatchingBrace()
+		if err != nil {
+			return err
+		}
+
+		l.tokens = append(l.tokens, Token{
+			Type:    TOKEN_FUNC_BLOCK,
+			Value:   strings.TrimSpace(expr) + "|" + strings.TrimSpace(blockContent),
+			Line:    startLine,
+			Column:  startColumn,
+			Context: l.getContext(startLine),
+		})
+		return nil
 	}
 
 	// 检查是否以 ? 结尾（条件控制）
@@ -275,6 +297,37 @@ func (l *Lexer) scanVarExpr(startLine, startColumn int) error {
 		Context: l.getContext(startLine),
 	})
 	return nil
+}
+
+// readExprOrFuncBlock 读取表达式，检测是否是函数块
+func (l *Lexer) readExprOrFuncBlock() (string, bool, error) {
+	var sb strings.Builder
+	startLine := l.line
+	parenDepth := 0
+
+	for l.pos < len(l.input) {
+		ch := l.peek()
+
+		if ch == '(' {
+			parenDepth++
+			sb.WriteByte(l.advance())
+		} else if ch == ')' {
+			parenDepth--
+			sb.WriteByte(l.advance())
+		} else if ch == '@' && parenDepth == 0 {
+			// 正常表达式结束
+			l.advance()
+			return sb.String(), false, nil
+		} else if ch == '{' && parenDepth == 0 {
+			// 函数块
+			l.advance() // 跳过 {
+			return sb.String(), true, nil
+		} else {
+			sb.WriteByte(l.advance())
+		}
+	}
+
+	return "", false, fmt.Errorf("line %d: unclosed expression", startLine)
 }
 
 // scanRawToken 扫描 @= 开头的 token
@@ -424,26 +477,32 @@ func (l *Lexer) scanForToken(startLine, startColumn int) error {
 func (l *Lexer) scanUseToken(startLine, startColumn int) error {
 	l.skipWhitespace()
 
-	// 读取 use 路径直到 {
-	path, err := l.readUntilBrace()
-	if err != nil {
-		return err
+	// 读取路径，直到 { 为止
+	var sb strings.Builder
+	for l.pos < len(l.input) && l.peek() != '{' && l.peek() != '\n' {
+		sb.WriteByte(l.advance())
 	}
+	path := strings.TrimSpace(sb.String())
 
 	l.tokens = append(l.tokens, Token{
 		Type:    TOKEN_USE,
-		Value:   strings.TrimSpace(path),
+		Value:   path,
 		Line:    startLine,
 		Column:  startColumn,
 		Context: l.getContext(startLine),
 	})
 
-	l.tokens = append(l.tokens, Token{
-		Type:   TOKEN_LBRACE,
-		Line:   l.line,
-		Column: l.column,
-	})
-	l.advance() // 跳过 {
+	l.skipWhitespace()
+
+	// 期望 {
+	if l.peek() == '{' {
+		l.tokens = append(l.tokens, Token{
+			Type:   TOKEN_LBRACE,
+			Line:   l.line,
+			Column: l.column,
+		})
+		l.advance()
+	}
 
 	return nil
 }
@@ -452,26 +511,31 @@ func (l *Lexer) scanUseToken(startLine, startColumn int) error {
 func (l *Lexer) scanDefineToken(startLine, startColumn int) error {
 	l.skipWhitespace()
 
-	// 读取 define 名称直到 {
-	name, err := l.readUntilBrace()
-	if err != nil {
-		return err
+	// 读取名称，直到 { 为止
+	var sb strings.Builder
+	for l.pos < len(l.input) && l.peek() != '{' && l.peek() != '\n' {
+		sb.WriteByte(l.advance())
 	}
+	name := strings.TrimSpace(sb.String())
 
 	l.tokens = append(l.tokens, Token{
 		Type:    TOKEN_DEFINE,
-		Value:   strings.TrimSpace(name),
+		Value:   name,
 		Line:    startLine,
 		Column:  startColumn,
 		Context: l.getContext(startLine),
 	})
 
-	l.tokens = append(l.tokens, Token{
-		Type:   TOKEN_LBRACE,
-		Line:   l.line,
-		Column: l.column,
-	})
-	l.advance() // 跳过 {
+	l.skipWhitespace()
+
+	if l.peek() == '{' {
+		l.tokens = append(l.tokens, Token{
+			Type:   TOKEN_LBRACE,
+			Line:   l.line,
+			Column: l.column,
+		})
+		l.advance()
+	}
 
 	return nil
 }
@@ -480,26 +544,31 @@ func (l *Lexer) scanDefineToken(startLine, startColumn int) error {
 func (l *Lexer) scanCoverToken(startLine, startColumn int) error {
 	l.skipWhitespace()
 
-	// 读取 cover 名称直到 {
-	name, err := l.readUntilBrace()
-	if err != nil {
-		return err
+	// 读取名称，直到 { 为止
+	var sb strings.Builder
+	for l.pos < len(l.input) && l.peek() != '{' && l.peek() != '\n' {
+		sb.WriteByte(l.advance())
 	}
+	name := strings.TrimSpace(sb.String())
 
 	l.tokens = append(l.tokens, Token{
 		Type:    TOKEN_COVER,
-		Value:   strings.TrimSpace(name),
+		Value:   name,
 		Line:    startLine,
 		Column:  startColumn,
 		Context: l.getContext(startLine),
 	})
 
-	l.tokens = append(l.tokens, Token{
-		Type:   TOKEN_LBRACE,
-		Line:   l.line,
-		Column: l.column,
-	})
-	l.advance() // 跳过 {
+	l.skipWhitespace()
+
+	if l.peek() == '{' {
+		l.tokens = append(l.tokens, Token{
+			Type:   TOKEN_LBRACE,
+			Line:   l.line,
+			Column: l.column,
+		})
+		l.advance()
+	}
 
 	return nil
 }

@@ -201,22 +201,22 @@ func TestBasicSQL(t *testing.T) {
 		"ids": []int{1, 2, 3},
 	}
 
-	sql, params, err := engine.GetSql("test.sql1", args)
+	query, err := engine.GetSql("test.sql1", args)
 	if err != nil {
 		t.Fatalf("GetSql error: %v", err)
 	}
 
-	t.Logf("SQL: %s", sql)
-	t.Logf("Params: %v", params)
+	t.Logf("SQL: %s", query.SQL)
+	t.Logf("Params: %v", query.Params)
 
 	// 验证 SQL 包含 ?
-	if !strings.Contains(sql, "?") {
+	if !strings.Contains(query.SQL, "?") {
 		t.Errorf("SQL should contain placeholders")
 	}
 
 	// 验证参数数量
-	if len(params) != 4 { // 1 个 id + 3 个 ids
-		t.Errorf("expected 4 params, got %d", len(params))
+	if len(query.Params) != 4 { // 1 个 id + 3 个 ids
+		t.Errorf("expected 4 params, got %d", len(query.Params))
 	}
 }
 
@@ -235,43 +235,43 @@ func TestIfCondition(t *testing.T) {
 		"id":   1,
 	}
 
-	sql, params, err := engine.GetSql("test.sql2", args)
+	query, err := engine.GetSql("test.sql2", args)
 	if err != nil {
 		t.Fatalf("GetSql error: %v", err)
 	}
 
-	t.Logf("SQL (a > 0): %s", sql)
-	t.Logf("Params: %v", params)
+	t.Logf("SQL (a > 0): %s", query.SQL)
+	t.Logf("Params: %v", query.Params)
 
-	if !strings.Contains(sql, "name =") {
+	if !strings.Contains(query.SQL, "name =") {
 		t.Errorf("SQL should contain 'name =' when a > 0")
 	}
 
 	// 测试 a < 0 的情况
 	args["a"] = -1
-	sql, params, err = engine.GetSql("test.sql2", args)
+	query, err = engine.GetSql("test.sql2", args)
 	if err != nil {
 		t.Fatalf("GetSql error: %v", err)
 	}
 
-	t.Logf("SQL (a < 0): %s", sql)
-	t.Logf("Params: %v", params)
+	t.Logf("SQL (a < 0): %s", query.SQL)
+	t.Logf("Params: %v", query.Params)
 
-	if !strings.Contains(sql, "age =") {
+	if !strings.Contains(query.SQL, "age =") {
 		t.Errorf("SQL should contain 'age =' when a < 0")
 	}
 
 	// 测试 a == 0 的情况（else）
 	args["a"] = 0
-	sql, params, err = engine.GetSql("test.sql2", args)
+	query, err = engine.GetSql("test.sql2", args)
 	if err != nil {
 		t.Fatalf("GetSql error: %v", err)
 	}
 
-	t.Logf("SQL (a == 0): %s", sql)
-	t.Logf("Params: %v", params)
+	t.Logf("SQL (a == 0): %s", query.SQL)
+	t.Logf("Params: %v", query.Params)
 
-	if !strings.Contains(sql, "id =") {
+	if !strings.Contains(query.SQL, "id =") {
 		t.Errorf("SQL should contain 'id =' when a == 0")
 	}
 }
@@ -287,16 +287,16 @@ func TestDefine(t *testing.T) {
 		"id": 1,
 	}
 
-	sql, params, err := engine.GetSql("test.sql4", args)
+	query, err := engine.GetSql("test.sql4", args)
 	if err != nil {
 		t.Fatalf("GetSql error: %v", err)
 	}
 
-	t.Logf("SQL: %s", sql)
-	t.Logf("Params: %v", params)
+	t.Logf("SQL: %s", query.SQL)
+	t.Logf("Params: %v", query.Params)
 
 	// 验证 define 块的内容被输出
-	if !strings.Contains(sql, "and id =") {
+	if !strings.Contains(query.SQL, "and id =") {
 		t.Errorf("SQL should contain define block content")
 	}
 }
@@ -312,16 +312,16 @@ func TestUseAndCover(t *testing.T) {
 		"id": 1,
 	}
 
-	sql, params, err := engine.GetSql("test.sql3", args)
+	query, err := engine.GetSql("test.sql3", args)
 	if err != nil {
 		t.Fatalf("GetSql error: %v", err)
 	}
 
-	t.Logf("SQL: %s", sql)
-	t.Logf("Params: %v", params)
+	t.Logf("SQL: %s", query.SQL)
+	t.Logf("Params: %v", query.Params)
 
 	// 验证 cover 覆盖了 define
-	if !strings.Contains(sql, "id <>") {
+	if !strings.Contains(query.SQL, "id <>") {
 		t.Errorf("SQL should contain covered content 'id <>'")
 	}
 }
@@ -335,16 +335,16 @@ func TestForLoop(t *testing.T) {
 
 	args := map[string]interface{}{}
 
-	sql, params, err := engine.GetSql("test.sql5", args)
+	query, err := engine.GetSql("test.sql5", args)
 	if err != nil {
 		t.Fatalf("GetSql error: %v", err)
 	}
 
-	t.Logf("SQL: %s", sql)
-	t.Logf("Params: %v", params)
+	t.Logf("SQL: %s", query.SQL)
+	t.Logf("Params: %v", query.Params)
 
 	// 验证循环执行了 3 次
-	if strings.Count(sql, "col") != 3 {
+	if strings.Count(query.SQL, "col") != 3 {
 		t.Errorf("SQL should contain 3 'col' occurrences")
 	}
 }
@@ -377,16 +377,16 @@ select * from users where id = @id and name = @name
 		Name: "test",
 	}
 
-	sql, params, err := engine.GetSql("user.findById", args)
+	query, err := engine.GetSql("user.findById", args)
 	if err != nil {
 		t.Fatalf("GetSql error: %v", err)
 	}
 
-	t.Logf("SQL: %s", sql)
-	t.Logf("Params: %v", params)
+	t.Logf("SQL: %s", query.SQL)
+	t.Logf("Params: %v", query.Params)
 
-	if len(params) != 2 {
-		t.Errorf("expected 2 params, got %d", len(params))
+	if len(query.Params) != 2 {
+		t.Errorf("expected 2 params, got %d", len(query.Params))
 	}
 }
 
@@ -412,22 +412,22 @@ select * from @=tableName@ where id = @id
 		"id":        1,
 	}
 
-	sql, params, err := engine.GetSql("test.dynamic", args)
+	query, err := engine.GetSql("test.dynamic", args)
 	if err != nil {
 		t.Fatalf("GetSql error: %v", err)
 	}
 
-	t.Logf("SQL: %s", sql)
-	t.Logf("Params: %v", params)
+	t.Logf("SQL: %s", query.SQL)
+	t.Logf("Params: %v", query.Params)
 
 	// 验证 tableName 被直接输出
-	if !strings.Contains(sql, "from users") {
+	if !strings.Contains(query.SQL, "from users") {
 		t.Errorf("SQL should contain 'from users'")
 	}
 
 	// 验证 id 是参数
-	if len(params) != 1 {
-		t.Errorf("expected 1 param, got %d", len(params))
+	if len(query.Params) != 1 {
+		t.Errorf("expected 1 param, got %d", len(query.Params))
 	}
 }
 
@@ -468,16 +468,16 @@ select * from table
 		"name": "test",
 	}
 
-	sql, params, err := engine.GetSql("test.useNested", args)
+	query, err := engine.GetSql("test.useNested", args)
 	if err != nil {
 		t.Fatalf("GetSql error: %v", err)
 	}
 
-	t.Logf("SQL: %s", sql)
-	t.Logf("Params: %v", params)
+	t.Logf("SQL: %s", query.SQL)
+	t.Logf("Params: %v", query.Params)
 
 	// 验证嵌套 define 被覆盖
-	if !strings.Contains(sql, "name =") {
+	if !strings.Contains(query.SQL, "name =") {
 		t.Errorf("SQL should contain 'name =' (covered)")
 	}
 }
@@ -514,12 +514,12 @@ func TestGetSql(t *testing.T) {
 		t.Fatalf("LoadMarkdown error: %v", err)
 	}
 
-	sql, params, err := engine.GetSql("test.sql1", map[string]interface{}{"id": 1, "ids": []int{1, 2, 3}})
+	query, err := engine.GetSql("test.sql1", map[string]interface{}{"id": 1, "ids": []int{1, 2, 3}})
 	if err != nil {
 		t.Fatalf("GetSql error: %v", err)
 	}
-	t.Logf("SQL: %s", sql)
-	t.Logf("Params: %v", params)
+	t.Logf("SQL: %s", query.SQL)
+	t.Logf("Params: %v", query.Params)
 
 	t.Log("==================")
 	t.Log("TestGetSql with struct")
@@ -527,21 +527,21 @@ func TestGetSql(t *testing.T) {
 		Id:   1,
 		Name: "test",
 	}
-	sql, params, err = engine.GetSql("test.sql5", p)
+	query, err = engine.GetSql("test.sql5", p)
 	if err != nil {
 		t.Fatalf("GetSql error: %v", err)
 	}
-	t.Logf("SQL: %s", sql)
-	t.Logf("Params: %v", params)
+	t.Logf("SQL: %s", query.SQL)
+	t.Logf("Params: %v", query.Params)
 
 	t.Log("==================")
 	t.Log("TestGetSql with condition")
-	sql, params, err = engine.GetSql("test.sql2", map[string]interface{}{"a": 1, "name": "test", "age": 20, "id": 1, "ids": []int{1, 2, 3}})
+	query, err = engine.GetSql("test.sql2", map[string]interface{}{"a": 1, "name": "test", "age": 20, "id": 1, "ids": []int{1, 2, 3}})
 	if err != nil {
 		t.Fatalf("GetSql error: %v", err)
 	}
-	t.Logf("SQL: %s", sql)
-	t.Logf("Params: %v", params)
+	t.Logf("SQL: %s", query.SQL)
+	t.Logf("Params: %v", query.Params)
 }
 
 func TestConditionalLine(t *testing.T) {
@@ -560,15 +560,15 @@ func TestConditionalLine(t *testing.T) {
 		"ids":  []int{1, 2},
 	}
 
-	sql, params, err := engine.GetSql("test.sql2", args)
+	query, err := engine.GetSql("test.sql2", args)
 	if err != nil {
 		t.Fatalf("GetSql error: %v", err)
 	}
-	t.Logf("SQL: %s", sql)
-	t.Logf("Params: %v", params)
+	t.Logf("SQL: %s", query.SQL)
+	t.Logf("Params: %v", query.Params)
 
 	// name 有值应该输出，age 和 id 为 0 不应输出
-	if !strings.Contains(sql, "name =") {
+	if !strings.Contains(query.SQL, "name =") {
 		t.Error("SQL should contain 'name =' when name has value")
 	}
 }
@@ -599,16 +599,16 @@ select * from users where id = @id and name = @name and base_field = @baseField
 		},
 	}
 
-	sql, params, err := engine.GetSql("test.embedded", args)
+	query, err := engine.GetSql("test.embedded", args)
 	if err != nil {
 		t.Fatalf("GetSql error: %v", err)
 	}
 
-	t.Logf("SQL: %s", sql)
-	t.Logf("Params: %v", params)
+	t.Logf("SQL: %s", query.SQL)
+	t.Logf("Params: %v", query.Params)
 
-	if len(params) != 3 {
-		t.Errorf("expected 3 params, got %d", len(params))
+	if len(query.Params) != 3 {
+		t.Errorf("expected 3 params, got %d", len(query.Params))
 	}
 }
 
@@ -638,18 +638,18 @@ base value is @= GetBaseValue() @
 		},
 	}
 
-	sql, params, err := engine.GetSql("test.embeddedMethod", args)
+	query, err := engine.GetSql("test.embeddedMethod", args)
 	if err != nil {
 		t.Fatalf("GetSql error: %v", err)
 	}
 
-	t.Logf("SQL: %s", sql)
-	t.Logf("Params: %v", params)
+	t.Logf("SQL: %s", query.SQL)
+	t.Logf("Params: %v", query.Params)
 
-	if !strings.Contains(sql, "world") {
+	if !strings.Contains(query.SQL, "world") {
 		t.Error("SQL should contain GetName() result 'world'")
 	}
-	if !strings.Contains(sql, "hello") {
+	if !strings.Contains(query.SQL, "hello") {
 		t.Error("SQL should contain GetBaseValue() result 'hello'")
 	}
 }
@@ -678,4 +678,168 @@ func (p *Person) GetId() int {
 type EmbeddedPerson struct {
 	Base
 	Person
+}
+
+func TestPrivateField(t *testing.T) {
+	engine := New()
+
+	markdown := `
+# test
+
+## privateField
+` + "```sql" + `
+select * from users where private = @privateField and public = @PublicField
+` + "```" + `
+`
+
+	err := engine.LoadMarkdown(markdown)
+	if err != nil {
+		t.Fatalf("LoadMarkdown error: %v", err)
+	}
+
+	// 使用指针传入才能访问私有字段
+	args := &StructWithPrivate{
+		privateField: "secret",
+		PublicField:  "public",
+	}
+
+	query, err := engine.GetSql("test.privateField", args)
+	if err != nil {
+		t.Fatalf("GetSql error: %v", err)
+	}
+
+	t.Logf("SQL: %s", query.SQL)
+	t.Logf("Params: %v", query.Params)
+
+	if len(query.Params) != 2 {
+		t.Errorf("expected 2 params, got %d", len(query.Params))
+	}
+}
+
+type StructWithPrivate struct {
+	privateField string
+	PublicField  string
+}
+
+func TestFuncSyntax(t *testing.T) {
+	engine := New()
+
+	// 测试内置指令语法 @use path @define name @cover name
+	markdown := `
+# test
+
+## useFuncSyntax
+` + "```sql" + `
+@use test.defineFunc {
+	@cover block {
+		covered content
+	}
+}
+` + "```" + `
+
+## defineFunc
+` + "```sql" + `
+before define
+@define block {
+	default content
+}
+after define
+` + "```" + `
+`
+
+	err := engine.LoadMarkdown(markdown)
+	if err != nil {
+		t.Fatalf("LoadMarkdown error: %v", err)
+	}
+
+	query, err := engine.GetSql("test.useFuncSyntax", nil)
+	if err != nil {
+		t.Fatalf("GetSql error: %v", err)
+	}
+
+	t.Logf("SQL: %s", query.SQL)
+
+	// 验证 cover 覆盖了 define
+	if !strings.Contains(query.SQL, "covered content") {
+		t.Error("SQL should contain covered content")
+	}
+	if strings.Contains(query.SQL, "default content") {
+		t.Error("SQL should NOT contain default content (should be covered)")
+	}
+}
+
+func TestConditionNotExist(t *testing.T) {
+	engine := New()
+
+	markdown := `
+# test
+
+## condNotExist
+` + "```sql" + `
+select * from users
+where 1 = 1
+    and name = @name?
+    and notexist = @notexist?
+` + "```" + `
+`
+
+	err := engine.LoadMarkdown(markdown)
+	if err != nil {
+		t.Fatalf("LoadMarkdown error: %v", err)
+	}
+
+	// 只传 name，不传 notexist
+	args := map[string]interface{}{
+		"name": "test",
+	}
+
+	query, err := engine.GetSql("test.condNotExist", args)
+	if err != nil {
+		t.Fatalf("GetSql error: %v", err)
+	}
+
+	t.Logf("SQL: %s", query.SQL)
+	t.Logf("Params: %v", query.Params)
+
+	// name 应该输出，notexist 行应该跳过
+	if !strings.Contains(query.SQL, "name =") {
+		t.Error("SQL should contain 'name ='")
+	}
+	if strings.Contains(query.SQL, "notexist =") {
+		t.Error("SQL should NOT contain 'notexist =' when field doesn't exist")
+	}
+}
+
+func TestRegisterFunc(t *testing.T) {
+	engine := New()
+
+	markdown := `
+# test
+
+## customFunc
+` + "```sql" + `
+result is @= CustomFunc("hello") @
+` + "```" + `
+`
+
+	err := engine.LoadMarkdown(markdown)
+	if err != nil {
+		t.Fatalf("LoadMarkdown error: %v", err)
+	}
+
+	// 注册自定义函数
+	engine.RegisterFunc("CustomFunc", func(s string) string {
+		return "custom: " + s
+	})
+
+	query, err := engine.GetSql("test.customFunc", map[string]interface{}{})
+	if err != nil {
+		t.Fatalf("GetSql error: %v", err)
+	}
+
+	t.Logf("SQL: %s", query.SQL)
+
+	if !strings.Contains(query.SQL, "custom: hello") {
+		t.Error("SQL should contain custom function result")
+	}
 }

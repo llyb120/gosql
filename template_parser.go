@@ -2,6 +2,7 @@ package gosql
 
 import (
 	"fmt"
+	"strings"
 )
 
 // TemplateParser SQL 模板解析器
@@ -109,6 +110,9 @@ func (p *TemplateParser) parseNode() (Node, error) {
 
 	case TOKEN_COVER:
 		return p.parseCover()
+
+	case TOKEN_FUNC_BLOCK:
+		return p.parseFuncBlock()
 
 	case TOKEN_LBRACE:
 		// 跳过孤立的 {
@@ -320,6 +324,40 @@ func (p *TemplateParser) parseCover() (Node, error) {
 	return &CoverNode{
 		Name: name,
 		Body: body,
+	}, nil
+}
+
+// parseFuncBlock 解析函数块 @ func() {}
+func (p *TemplateParser) parseFuncBlock() (Node, error) {
+	token := p.advance() // 消费 FUNC_BLOCK token
+
+	// token.Value 格式为 "funcExpr|blockContent"
+	parts := strings.SplitN(token.Value, "|", 2)
+	funcExpr := parts[0]
+	blockContent := ""
+	if len(parts) > 1 {
+		blockContent = parts[1]
+	}
+
+	// 解析块内容为节点
+	var bodyNodes []Node
+	if blockContent != "" {
+		lexer := NewLexer(blockContent)
+		tokens, err := lexer.Tokenize()
+		if err != nil {
+			return nil, fmt.Errorf("line %d: error parsing func block: %w", token.Line, err)
+		}
+		subParser := NewTemplateParser(tokens)
+		ast, err := subParser.Parse()
+		if err != nil {
+			return nil, fmt.Errorf("line %d: error parsing func block: %w", token.Line, err)
+		}
+		bodyNodes = ast.Nodes
+	}
+
+	return &FuncBlockNode{
+		FuncExpr: funcExpr,
+		Body:     bodyNodes,
 	}, nil
 }
 
