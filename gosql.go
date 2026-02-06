@@ -31,10 +31,11 @@ type Engine struct {
 // New 创建新的 SQL 模板引擎
 func New() *Engine {
 	return &Engine{
-		store:  NewTemplateStore(),
-		interp: interpreter.New(),
-		funcs:  make(map[string]interface{}),
-		mu:     sync.RWMutex{},
+		store:       NewTemplateStore(),
+		compiledAST: make(map[string]*TemplateAST),
+		interp:      interpreter.New(),
+		funcs:       make(map[string]interface{}),
+		mu:          sync.RWMutex{},
 	}
 }
 
