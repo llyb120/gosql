@@ -1,6 +1,7 @@
 package gosql
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/llyb120/goscript2/interpreter"
 )
+
+var ERR_TEMPLATE_NOT_FOUND = errors.New("template not found")
 
 // Query 表示 SQL 查询结果
 type Query struct {
@@ -88,7 +91,7 @@ func (e *Engine) GetSql(path string, args interface{}) (Query, error) {
 	// 获取 AST
 	ast, ok := e.compiledAST[key]
 	if !ok {
-		return Query{}, fmt.Errorf("template not found: %s", key)
+		return Query{}, ERR_TEMPLATE_NOT_FOUND
 	}
 
 	// 创建执行上下文
