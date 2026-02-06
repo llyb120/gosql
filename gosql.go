@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"unsafe"
 
 	"github.com/llyb120/goscript2/interpreter"
@@ -21,25 +22,30 @@ type Engine struct {
 	compiledAST map[string]*TemplateAST // 缓存编译后的 AST
 	interp      *interpreter.Interpreter
 	funcs       map[string]interface{} // 注册的自定义函数
+	mu          sync.RWMutex
 }
 
 // New 创建新的 SQL 模板引擎
 func New() *Engine {
 	return &Engine{
-		store:       NewTemplateStore(),
-		compiledAST: make(map[string]*TemplateAST),
-		interp:      interpreter.New(),
-		funcs:       make(map[string]interface{}),
+		store:  NewTemplateStore(),
+		interp: interpreter.New(),
+		funcs:  make(map[string]interface{}),
+		mu:     sync.RWMutex{},
 	}
 }
 
 // RegisterFunc 注册自定义函数
 func (e *Engine) RegisterFunc(name string, fn interface{}) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.funcs[name] = fn
 }
 
 // LoadMarkdown 加载 markdown 文件内容
 func (e *Engine) LoadMarkdown(content string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	if err := e.store.LoadMarkdown(content); err != nil {
 		return err
 	}
@@ -62,6 +68,8 @@ func (e *Engine) LoadMarkdown(content string) error {
 // path: 模板路径，格式为 "namespace.name" 或 "namespace.name.define"
 // args: 模板渲染的 scope（任意类型，会被展开为变量）
 func (e *Engine) GetSql(path string, args interface{}) (Query, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	// 解析路径
 	parts := strings.Split(path, ".")
 	if len(parts) < 2 {
