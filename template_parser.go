@@ -327,7 +327,7 @@ func (p *TemplateParser) parseCover() (Node, error) {
 	}, nil
 }
 
-// parseFuncBlock 解析函数块 @ func() {}
+// parseFuncBlock 解析函数块 @func() {}
 func (p *TemplateParser) parseFuncBlock() (Node, error) {
 	token := p.advance() // 消费 FUNC_BLOCK token
 

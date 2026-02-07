@@ -1,3 +1,5 @@
+//go:generate go run ./cmd/gosqlgen -input example.md -output example_gen.go -package gosql -self
+
 package gosql
 
 import (
@@ -13,6 +15,18 @@ import (
 
 var ERR_TEMPLATE_NOT_FOUND = errors.New("template not found")
 
+// ExecMode 执行模式
+type ExecMode int
+
+const (
+	// ExecModeAuto 自动模式：优先静态，无静态注册时回退动态（默认）
+	ExecModeAuto ExecMode = iota
+	// ExecModeStatic 强制静态模式：仅使用静态注册的函数，未注册则报错
+	ExecModeStatic
+	// ExecModeDynamic 强制动态模式：忽略静态注册，始终使用 AST 解释执行
+	ExecModeDynamic
+)
+
 // Query 表示 SQL 查询结果
 type Query struct {
 	SQL    string        // SQL 语句
@@ -25,6 +39,7 @@ type Engine struct {
 	compiledAST map[string]*TemplateAST // 缓存编译后的 AST
 	interp      *interpreter.Interpreter
 	funcs       map[string]interface{} // 注册的自定义函数
+	mode        ExecMode               // 执行模式
 	mu          sync.RWMutex
 }
 
@@ -35,8 +50,26 @@ func New() *Engine {
 		compiledAST: make(map[string]*TemplateAST),
 		interp:      interpreter.New(),
 		funcs:       make(map[string]interface{}),
+		mode:        ExecModeAuto,
 		mu:          sync.RWMutex{},
 	}
+}
+
+// SetMode 设置执行模式
+//   - ExecModeAuto: 优先静态，回退动态（默认）
+//   - ExecModeStatic: 强制静态，未注册则报错
+//   - ExecModeDynamic: 强制动态，忽略静态注册
+func (e *Engine) SetMode(mode ExecMode) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.mode = mode
+}
+
+// GetMode 获取当前执行模式
+func (e *Engine) GetMode() ExecMode {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.mode
 }
 
 // RegisterFunc 注册自定义函数
@@ -71,9 +104,11 @@ func (e *Engine) LoadMarkdown(content string) error {
 // GetSql 获取渲染后的 SQL 和参数
 // path: 模板路径，格式为 "namespace.name" 或 "namespace.name.define"
 // args: 模板渲染的 scope（任意类型，会被展开为变量）
+// 自动选择模式：如果存在静态版本则使用静态模式（高性能），否则使用动态模式（反射）
 func (e *Engine) GetSql(path string, args interface{}) (Query, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
+
 	// 解析路径
 	parts := strings.Split(path, ".")
 	if len(parts) < 2 {
@@ -89,7 +124,35 @@ func (e *Engine) GetSql(path string, args interface{}) (Query, error) {
 
 	key := namespace + "." + name
 
-	// 获取 AST
+	switch e.mode {
+	case ExecModeStatic:
+		// 强制静态模式
+		if fn, ok := getStaticFunc(key); ok && defineName == "" {
+			ctx := NewStaticContext(e, args)
+			if err := fn(ctx); err != nil {
+				return Query{}, err
+			}
+			return ctx.Build(), nil
+		}
+		return Query{}, fmt.Errorf("static function not registered for %s", key)
+
+	case ExecModeDynamic:
+		// 强制动态模式，跳过静态查找
+
+	default:
+		// ExecModeAuto：优先静态，回退动态
+		if defineName == "" {
+			if fn, ok := getStaticFunc(key); ok {
+				ctx := NewStaticContext(e, args)
+				if err := fn(ctx); err != nil {
+					return Query{}, err
+				}
+				return ctx.Build(), nil
+			}
+		}
+	}
+
+	// 动态模式
 	ast, ok := e.compiledAST[key]
 	if !ok {
 		return Query{}, ERR_TEMPLATE_NOT_FOUND
@@ -157,19 +220,20 @@ func findDefine(nodes []Node, name string) *DefineNode {
 
 // executionContext 执行上下文
 type executionContext struct {
-	engine     *Engine
-	scope      map[string]interface{}
-	sql        strings.Builder
-	args       []interface{}
-	covers     map[string][]Node // cover 覆盖
-	interp     *interpreter.Interpreter
-	scopeObj   interface{}     // 原始 scope 对象（用于方法调用）
-	typeInfo   *CachedTypeInfo // 缓存的类型信息
-	lineBuffer strings.Builder // 行缓冲（用于条件行控制）
-	lineArgs   []interface{}   // 行参数缓冲
-	inCondLine bool            // 是否在条件行中
-	condResult bool            // 条件结果
-	definePath []string        // 当前 define 块的路径栈（用于嵌套覆盖）
+	engine       *Engine
+	scope        map[string]interface{}
+	sql          strings.Builder
+	args         []interface{}
+	covers       map[string][]Node                        // cover 覆盖
+	interp       *interpreter.Interpreter
+	scopeObj     interface{}                              // 原始 scope 对象（用于方法调用）
+	typeInfo     *CachedTypeInfo                          // 缓存的类型信息
+	lineBuffer   strings.Builder                          // 行缓冲（用于条件行控制）
+	lineArgs     []interface{}                            // 行参数缓冲
+	inCondLine   bool                                     // 是否在条件行中
+	condResult   bool                                     // 条件结果
+	definePath   []string                                 // 当前 define 块的路径栈（用于嵌套覆盖）
+	staticCovers map[string]func(*StaticContext) error    // 静态模式桥接 covers
 }
 
 // newExecutionContext 创建执行上下文
@@ -532,7 +596,7 @@ func (ctx *executionContext) skipCurrentLine() {
 	}
 }
 
-// executeFuncBlock 执行函数块节点 @ func() {}
+// executeFuncBlock 执行函数块节点 @func() {}
 func (ctx *executionContext) executeFuncBlock(n *FuncBlockNode) error {
 	// 先执行块内节点，生成 Query
 	subCtx := &executionContext{
@@ -941,6 +1005,16 @@ func (ctx *executionContext) executeDefine(n *DefineNode) error {
 		fullPath = strings.Join(ctx.definePath, ".") + "." + n.Name
 	}
 
+	// 优先检查静态 covers（来自静态模式桥接）
+	if ctx.staticCovers != nil {
+		if coverFn, ok := ctx.staticCovers[fullPath]; ok {
+			return ctx.execStaticCover(coverFn)
+		}
+		if coverFn, ok := ctx.staticCovers[n.Name]; ok {
+			return ctx.execStaticCover(coverFn)
+		}
+	}
+
 	// 检查是否有 cover 覆盖（优先检查完整路径，再检查简单名称）
 	if coverBody, ok := ctx.covers[fullPath]; ok {
 		return ctx.executeNodes(coverBody)
@@ -959,6 +1033,24 @@ func (ctx *executionContext) executeDefine(n *DefineNode) error {
 	}()
 
 	return ctx.executeNodes(n.Body)
+}
+
+// execStaticCover 执行静态 cover 函数（桥接静态/动态模式）
+func (ctx *executionContext) execStaticCover(fn func(*StaticContext) error) error {
+	sCtx := &StaticContext{
+		engine:   ctx.engine,
+		scope:    ctx.scope,
+		scopeObj: ctx.scopeObj,
+		typeInfo: ctx.typeInfo,
+		covers:   make(map[string]func(*StaticContext) error),
+	}
+
+	if err := fn(sCtx); err != nil {
+		return err
+	}
+	ctx.sql.WriteString(sCtx.sql.String())
+	ctx.args = append(ctx.args, sCtx.args...)
+	return nil
 }
 
 // appendArg 添加参数（支持数组展开）

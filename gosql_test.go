@@ -8,7 +8,7 @@ import (
 
 // 测试 markdown
 const testMarkdown = `
-# test
+# tpl
 
 ## sql1
 基础功能
@@ -38,7 +38,7 @@ where id = 1
 use function
 ` + "```sql" + `
 select * from 
-@use test.sql4 {
+@use tpl.sql4 {
     @cover a {
         and id <> @id
     }
@@ -61,7 +61,7 @@ for loop
 select * from table
 where 1 = 1
 @for i := 0; i < 3; i++ {
-    and col@=i@ = @i
+    and col@={i} = @i
 }
 ` + "```" + `
 `
@@ -77,8 +77,8 @@ func TestParseMarkdown(t *testing.T) {
 	}
 
 	// 验证第一个模板
-	if templates[0].Namespace != "test" {
-		t.Errorf("expected namespace 'test', got '%s'", templates[0].Namespace)
+	if templates[0].Namespace != "tpl" {
+		t.Errorf("expected namespace 'tpl', got '%s'", templates[0].Namespace)
 	}
 	if templates[0].Name != "sql1" {
 		t.Errorf("expected name 'sql1', got '%s'", templates[0].Name)
@@ -201,7 +201,7 @@ func TestBasicSQL(t *testing.T) {
 		"ids": []int{1, 2, 3},
 	}
 
-	query, err := engine.GetSql("test.sql1", args)
+	query, err := engine.GetSql("tpl.sql1", args)
 	if err != nil {
 		t.Fatalf("GetSql error: %v", err)
 	}
@@ -235,7 +235,7 @@ func TestIfCondition(t *testing.T) {
 		"id":   1,
 	}
 
-	query, err := engine.GetSql("test.sql2", args)
+	query, err := engine.GetSql("tpl.sql2", args)
 	if err != nil {
 		t.Fatalf("GetSql error: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestIfCondition(t *testing.T) {
 
 	// 测试 a < 0 的情况
 	args["a"] = -1
-	query, err = engine.GetSql("test.sql2", args)
+	query, err = engine.GetSql("tpl.sql2", args)
 	if err != nil {
 		t.Fatalf("GetSql error: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestIfCondition(t *testing.T) {
 
 	// 测试 a == 0 的情况（else）
 	args["a"] = 0
-	query, err = engine.GetSql("test.sql2", args)
+	query, err = engine.GetSql("tpl.sql2", args)
 	if err != nil {
 		t.Fatalf("GetSql error: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestDefine(t *testing.T) {
 		"id": 1,
 	}
 
-	query, err := engine.GetSql("test.sql4", args)
+	query, err := engine.GetSql("tpl.sql4", args)
 	if err != nil {
 		t.Fatalf("GetSql error: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestUseAndCover(t *testing.T) {
 		"id": 1,
 	}
 
-	query, err := engine.GetSql("test.sql3", args)
+	query, err := engine.GetSql("tpl.sql3", args)
 	if err != nil {
 		t.Fatalf("GetSql error: %v", err)
 	}
@@ -335,7 +335,7 @@ func TestForLoop(t *testing.T) {
 
 	args := map[string]interface{}{}
 
-	query, err := engine.GetSql("test.sql5", args)
+	query, err := engine.GetSql("tpl.sql5", args)
 	if err != nil {
 		t.Fatalf("GetSql error: %v", err)
 	}
@@ -398,7 +398,7 @@ func TestRawOutput(t *testing.T) {
 
 ## dynamic
 ` + "```sql" + `
-select * from @=tableName@ where id = @id
+select * from @=tableName where id = @id
 ` + "```" + `
 `
 
@@ -508,6 +508,7 @@ select * from table
 
 func TestGetSql(t *testing.T) {
 	engine := New()
+	engine.SetMode(ExecModeDynamic)
 	bs, _ := os.ReadFile("example.md")
 	err := engine.LoadMarkdown(string(bs))
 	if err != nil {
@@ -663,8 +664,8 @@ func TestEmbeddedMethod(t *testing.T) {
 
 ## embeddedMethod
 ` + "```sql" + `
-name is @= GetName() @
-base value is @= GetBaseValue() @
+name is @={GetName()}
+base value is @={GetBaseValue()}
 ` + "```" + `
 `
 
@@ -873,7 +874,7 @@ func TestRegisterFunc(t *testing.T) {
 
 ## customFunc
 ` + "```sql" + `
-result is @= CustomFunc("hello") @
+result is @={CustomFunc("hello")}
 ` + "```" + `
 `
 
@@ -903,7 +904,7 @@ func TestNestedDefineOverride(t *testing.T) {
 	engine := New()
 
 	markdown := `
-# test
+# tpl2
 
 ## sql7_5
 ` + "```sql" + `
@@ -922,7 +923,7 @@ pre
 
 ## sql8
 ` + "```sql" + `
-@use test.sql7_5 {
+@use tpl2.sql7_5 {
     @cover abc.d {
         d block changed
     }
@@ -931,7 +932,7 @@ pre
 
 ## sql8_2
 ` + "```sql" + `
-@use test.sql7_5 {
+@use tpl2.sql7_5 {
     @cover abc {
         abc block changed
     }
@@ -945,7 +946,7 @@ pre
 	}
 
 	// 测试覆盖嵌套的 define 块 abc.d
-	query, err := engine.GetSql("test.sql8", map[string]interface{}{
+	query, err := engine.GetSql("tpl2.sql8", map[string]interface{}{
 		"id":  1,
 		"id2": 2,
 	})
@@ -969,7 +970,7 @@ pre
 	}
 
 	// 测试覆盖外层的 abc 块
-	query2, err := engine.GetSql("test.sql8_2", map[string]interface{}{})
+	query2, err := engine.GetSql("tpl2.sql8_2", map[string]interface{}{})
 	if err != nil {
 		t.Fatalf("GetSql error: %v", err)
 	}

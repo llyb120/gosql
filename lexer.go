@@ -14,12 +14,12 @@ const (
 	TOKEN_TEXT                    // 普通 SQL 文本
 	TOKEN_VAR                     // @变量名 - 输出 ? 和参数
 	TOKEN_VAR_COND                // @变量名? - 条件控制的变量
-	TOKEN_VAR_EXPR                // @ expr @ - 复杂表达式输出 ? 和参数
-	TOKEN_VAR_EXPR_COND           // @ expr @? - 条件控制的表达式
+	TOKEN_VAR_EXPR                // @{expr} - 复杂表达式输出 ? 和参数（单行内容）
+	TOKEN_VAR_EXPR_COND           // @{expr}? - 条件控制的表达式
 	TOKEN_RAW                     // @=变量名 - 直接输出值
 	TOKEN_RAW_COND                // @=变量名? - 条件控制的直接输出
-	TOKEN_RAW_EXPR                // @= expr @ - 复杂表达式直接输出值
-	TOKEN_RAW_EXPR_COND           // @= expr @? - 条件控制的表达式直接输出
+	TOKEN_RAW_EXPR                // @={expr} - 复杂表达式直接输出值
+	TOKEN_RAW_EXPR_COND           // @={expr}? - 条件控制的表达式直接输出
 	TOKEN_IF                      // @if
 	TOKEN_ELSE_IF                 // } else if
 	TOKEN_ELSE                    // } else {
@@ -193,21 +193,26 @@ func (l *Lexer) scanAtToken() error {
 	startColumn := l.column
 	l.advance() // 跳过 @
 
-	// 检查 @=
+	// 检查 @={ 直接输出表达式：@={expr} 或 @={ expr }
+	if l.peek() == '=' && l.pos+1 < len(l.input) && l.input[l.pos+1] == '{' {
+		l.advance() // 跳过 =
+		l.advance() // 跳过 {
+		l.skipWhitespace()
+		return l.scanRawExprBlock(startLine, startColumn)
+	}
+
+	// 检查 @=var 直接输出变量
 	if l.peek() == '=' {
 		l.advance()
 		return l.scanRawToken(startLine, startColumn)
 	}
 
-	// 检查 @{} 直接代码块
+	// 检查 @{ 开头：区分代码块和变量表达式
+	// 单行内容 → 表达式 @{expr}
+	// 多行内容 → 代码块 @{code}
 	if l.peek() == '{' {
-		return l.scanCodeBlock(startLine, startColumn)
-	}
-
-	// 检查 @ expr @ 表达式（@ 后面是空格开始的表达式）
-	if l.peek() == ' ' || l.peek() == '\t' {
-		l.skipWhitespace()
-		return l.scanVarExpr(startLine, startColumn)
+		l.advance() // 跳过 {
+		return l.scanBraceBlock(startLine, startColumn)
 	}
 
 	// 读取关键字或变量名
@@ -326,30 +331,12 @@ func (l *Lexer) scanFuncBlockToken(funcName string, startLine, startColumn int) 
 	return nil
 }
 
-// scanVarExpr 扫描 @ expr @ 表达式或 @ func() {} 函数块
+// scanVarExpr 扫描 @{ expr } 变量表达式
+// 进入时 @{ 和空格已被消费，读取到匹配的 } 为止
 func (l *Lexer) scanVarExpr(startLine, startColumn int) error {
-	// 先尝试读取表达式，检查是否是函数块
-	expr, hasBlock, err := l.readExprOrFuncBlock()
+	expr, err := l.readUntilClosingBrace()
 	if err != nil {
 		return err
-	}
-
-	if hasBlock {
-		// 这是一个函数块 @ func() {}
-		// 读取块内容
-		blockContent, err := l.readUntilMatchingBrace()
-		if err != nil {
-			return err
-		}
-
-		l.tokens = append(l.tokens, Token{
-			Type:    TOKEN_FUNC_BLOCK,
-			Value:   strings.TrimSpace(expr) + "|" + strings.TrimSpace(blockContent),
-			Line:    startLine,
-			Column:  startColumn,
-			Context: l.getContext(startLine),
-		})
-		return nil
 	}
 
 	// 检查是否以 ? 结尾（条件控制）
@@ -369,8 +356,33 @@ func (l *Lexer) scanVarExpr(startLine, startColumn int) error {
 	return nil
 }
 
-// readExprOrFuncBlock 读取表达式，检测是否是函数块
-func (l *Lexer) readExprOrFuncBlock() (string, bool, error) {
+// scanRawExprBlock 扫描 @={expr} 直接输出表达式
+// 进入时 @={ 和可选空格已被消费，读取到匹配的 } 为止
+func (l *Lexer) scanRawExprBlock(startLine, startColumn int) error {
+	expr, err := l.readUntilClosingBrace()
+	if err != nil {
+		return err
+	}
+
+	// 检查是否以 ? 结尾（条件控制）
+	tokenType := TOKEN_RAW_EXPR
+	if l.peek() == '?' {
+		l.advance()
+		tokenType = TOKEN_RAW_EXPR_COND
+	}
+
+	l.tokens = append(l.tokens, Token{
+		Type:    tokenType,
+		Value:   strings.TrimSpace(expr),
+		Line:    startLine,
+		Column:  startColumn,
+		Context: l.getContext(startLine),
+	})
+	return nil
+}
+
+// readUntilClosingBrace 读取直到遇到匹配的 }（支持括号嵌套）
+func (l *Lexer) readUntilClosingBrace() (string, error) {
 	var sb strings.Builder
 	startLine := l.line
 	parenDepth := 0
@@ -384,56 +396,22 @@ func (l *Lexer) readExprOrFuncBlock() (string, bool, error) {
 		} else if ch == ')' {
 			parenDepth--
 			sb.WriteByte(l.advance())
-		} else if ch == '@' && parenDepth == 0 {
-			// 正常表达式结束
-			l.advance()
-			return sb.String(), false, nil
-		} else if ch == '{' && parenDepth == 0 {
-			// 函数块
-			l.advance() // 跳过 {
-			return sb.String(), true, nil
+		} else if ch == '}' && parenDepth == 0 {
+			l.advance() // 跳过结束的 }
+			return sb.String(), nil
 		} else {
 			sb.WriteByte(l.advance())
 		}
 	}
 
-	return "", false, fmt.Errorf("line %d: unclosed expression", startLine)
+	return "", fmt.Errorf("line %d: unclosed expression, expected '}' to close the expression", startLine)
 }
 
-// scanRawToken 扫描 @= 开头的 token
+// scanRawToken 扫描 @= 开头的 token（简单变量形式 @=var）
+// 注意：@={expr} 表达式形式在 scanAtToken 中已被处理
 func (l *Lexer) scanRawToken(startLine, startColumn int) error {
-	// 检查是否是表达式（后面有空格）
-	if l.peek() == ' ' || l.peek() == '\t' {
-		l.skipWhitespace()
-		expr, err := l.readUntilAt()
-		if err != nil {
-			return err
-		}
-
-		// 检查是否以 ? 结尾（条件控制）
-		tokenType := TOKEN_RAW_EXPR
-		if l.peek() == '?' {
-			l.advance()
-			tokenType = TOKEN_RAW_EXPR_COND
-		}
-
-		l.tokens = append(l.tokens, Token{
-			Type:    tokenType,
-			Value:   strings.TrimSpace(expr),
-			Line:    startLine,
-			Column:  startColumn,
-			Context: l.getContext(startLine),
-		})
-		return nil
-	}
-
-	// 普通变量名
+	// 读取变量名
 	word := l.readWord()
-
-	// 检查是否以 @ 结尾（@=var@ 形式）
-	if l.peek() == '@' {
-		l.advance() // 跳过结束的 @
-	}
 
 	// 检查是否以 ? 结尾（条件控制）
 	tokenType := TOKEN_RAW
@@ -452,38 +430,45 @@ func (l *Lexer) scanRawToken(startLine, startColumn int) error {
 	return nil
 }
 
-// readUntilAt 读取直到遇到 @
-func (l *Lexer) readUntilAt() (string, error) {
-	var sb strings.Builder
-	startLine := l.line
-
-	for l.pos < len(l.input) {
-		if l.peek() == '@' {
-			l.advance() // 跳过结束的 @
-			return sb.String(), nil
-		}
-		sb.WriteByte(l.advance())
-	}
-
-	return "", fmt.Errorf("line %d: unclosed expression, expected '@' to close the expression", startLine)
-}
-
-// scanCodeBlock 扫描 @{} 代码块
-func (l *Lexer) scanCodeBlock(startLine, startColumn int) error {
-	l.advance() // 跳过 {
-
-	code, err := l.readUntilMatchingBrace()
+// scanBraceBlock 扫描 @{...}，根据内容是否跨行区分表达式和代码块
+// 单行内容 → TOKEN_VAR_EXPR 表达式
+// 多行内容 → TOKEN_CODE 代码块
+func (l *Lexer) scanBraceBlock(startLine, startColumn int) error {
+	// 读取到匹配的 } 为止（复用 readUntilMatchingBrace）
+	content, err := l.readUntilMatchingBrace()
 	if err != nil {
 		return err
 	}
 
-	l.tokens = append(l.tokens, Token{
-		Type:    TOKEN_CODE,
-		Value:   strings.TrimSpace(code),
-		Line:    startLine,
-		Column:  startColumn,
-		Context: l.getContext(startLine),
-	})
+	// 判断内容是否包含换行符
+	if strings.Contains(content, "\n") {
+		// 多行 → 代码块
+		l.tokens = append(l.tokens, Token{
+			Type:    TOKEN_CODE,
+			Value:   strings.TrimSpace(content),
+			Line:    startLine,
+			Column:  startColumn,
+			Context: l.getContext(startLine),
+		})
+	} else {
+		// 单行 → 表达式
+		expr := strings.TrimSpace(content)
+
+		// 检查是否以 ? 结尾（条件控制）
+		tokenType := TOKEN_VAR_EXPR
+		if l.peek() == '?' {
+			l.advance()
+			tokenType = TOKEN_VAR_EXPR_COND
+		}
+
+		l.tokens = append(l.tokens, Token{
+			Type:    tokenType,
+			Value:   expr,
+			Line:    startLine,
+			Column:  startColumn,
+			Context: l.getContext(startLine),
+		})
+	}
 	return nil
 }
 

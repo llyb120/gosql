@@ -5,11 +5,13 @@
 ```sql
 select * from table 
 where 
-    id = @id
-    -- 数组的情况
-    and id in (@ids)
-    -- 直接输出的情况
-    and id = @=id
+    @trim("and") {
+        @for i := 0 ; i < 10; i++ {
+            and id = @{id}  
+            and id in (@ids)
+            and id = @=id
+        }
+    }
 
 
 ```
@@ -80,10 +82,10 @@ where 1 = 1
 
 ## sql5
 ```sql
-name is @= GetName() @
-id is @= GetId() @
+name is @={GetName()}
+id is @={GetId()}
 
-and a = @ Test() {
+and a = @Test() {
     select ok
 }
 
@@ -114,7 +116,7 @@ where
     1 = 1
     and id = @id
     and name = @GetName()
-    and name = @=GetName()
+    and name = @={GetName()}
 
 @if id > 0 {
     and a = 1
@@ -129,7 +131,7 @@ where
 
 @define abc {
     and id = @id
-    and id2 = @=Id
+    and id2 = @={Id}
 
     @define d {
         this is d block

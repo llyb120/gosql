@@ -20,7 +20,7 @@ type VarNode struct {
 
 func (n *VarNode) nodeType() string { return "var" }
 
-// VarExprNode 变量表达式节点 @ expr @ - 输出 ? 和参数
+// VarExprNode 变量表达式节点 @{ expr } - 输出 ? 和参数
 type VarExprNode struct {
 	Expr        string
 	Conditional bool // 是否以 ? 结尾（条件控制）
@@ -36,7 +36,7 @@ type RawNode struct {
 
 func (n *RawNode) nodeType() string { return "raw" }
 
-// RawExprNode 直接输出表达式节点 @= expr @
+// RawExprNode 直接输出表达式节点 @={expr}
 type RawExprNode struct {
 	Expr        string
 	Conditional bool // 是否以 ? 结尾（条件控制）
@@ -116,7 +116,7 @@ type CoverNode struct {
 
 func (n *CoverNode) nodeType() string { return "cover" }
 
-// FuncBlockNode 自定义函数块节点 @ func() {}
+// FuncBlockNode 自定义函数块节点 @func() {}
 type FuncBlockNode struct {
 	FuncExpr string // 函数表达式（如 GetName()）
 	Body     []Node // 块内节点
